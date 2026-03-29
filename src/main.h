@@ -1,0 +1,32 @@
+
+/*
+Rx commands with get a integer with the folllowing enum
+
+we will then report an id as necessaryh
+
+0 will be an id for the item
+1 will be the value itself
+
+*/
+
+enum IncomingCommands{
+
+    HOMEALL = 0,
+    HOMEBAR = 1,
+    HOMEPLATES = 2,
+    LIFTONEPLATE = 3,
+    LOWERONEPLATE = 4,
+    SMALLSTEP = 5,
+    RAISEBOTHPLATES = 6,
+    PREPPRINT = 7,
+    MOVEBAR = 8,
+    INITALL = 9,
+
+    
+
+
+
+} incommingCommands;
+
+
+
