@@ -1,6 +1,6 @@
 #pragma once
 #include <StepperMotor.h>
-
+#include <LimitSwitch.h>
 
 
 class LoadingPlates{
@@ -14,11 +14,13 @@ class LoadingPlates{
 
 
 
-    LoadingPlates(StepperMotor* _BuildPlate, StepperMotor* _LoadPlate);
+    LoadingPlates(StepperMotor* _BuildPlate, StepperMotor* _LoadPlate, LimitSwitch* _loadPlateSwitch, LimitSwitch* _buildPlateSwitch);
 
     StepperMotor* BuildPlate = nullptr;
     StepperMotor* LoadPlate = nullptr;
-
+    LimitSwitch* loadPlateSwitch = nullptr;
+    LimitSwitch* buildPlateSwitch = nullptr;
+    
     void init();
 
     void homeAll();

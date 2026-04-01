@@ -7,7 +7,7 @@ class LoaderBar {
 
     public:
 
-    LoaderBar(StepperMotor* _LeftArm, StepperMotor* _RightArm);
+    LoaderBar(StepperMotor* _LeftArm, StepperMotor* _RightArm, LimitSwitch* _LoadSwitch, LimitSwitch* _ResetSwitch);
 
     void init();
 

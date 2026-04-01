@@ -35,10 +35,13 @@ StepperMotor* leftArm = new StepperMotor(leftEN, leftDIR, leftSTEP);
 StepperMotor* rightArm = new StepperMotor(rightEN, rightDIR, rightSTEP);
 
 LimitSwitch* loadLimit = new LimitSwitch(2);
-LimitSwitch* restLimit = new LimitSwitch(3);
+LimitSwitch* resetLimit = new LimitSwitch(3);
 
-LoadingPlates* loadingSet = new LoadingPlates(buildPlate, loadPlate);
-LoaderBar* arm = new LoaderBar(leftArm, rightArm);
+LimitSwitch* loadPlateSwitch = new LimitSwitch(39);
+LimitSwitch* buildPlateSwitch =  new LimitSwitch(42);
+
+LoadingPlates* loadingSet = new LoadingPlates(buildPlate, loadPlate, loadPlateSwitch, buildPlateSwitch);
+LoaderBar* arm = new LoaderBar(leftArm, rightArm, loadLimit, resetLimit);
 
 
 void processCommand(std::vector<int> commandData){
@@ -109,17 +112,17 @@ void setup() {
   Serial.begin(115200);
 
 
-  delay(6500);
+  delay(5000);
   Serial.println("Homing All...");
   
-  //i2c.init(0,1);
+  i2c.init(0,1);
   arm->init(); 
-  loadingSet->init();
+  //loadingSet->init();
   //loadingSet->homeAll();
   //loadingSet->liftBothPlates();
  //loadingSet->setSpeed(StepperMotor::MEDIUM);
   
-  arm->setSwipe(1);
+ // arm->setSwipe(1);
  
   //arm->setSpeed(StepperMotor::FAST);
 
@@ -152,8 +155,8 @@ void setup() {
 
 void loop() {
 
-  //Serial.println("Looping...");
-  //delay(1000);
+  Serial.println("Looping...");
+  delay(1000);
   //arm->update();
   //loadingSet->update();
 

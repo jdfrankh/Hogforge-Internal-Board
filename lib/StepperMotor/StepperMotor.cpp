@@ -11,11 +11,15 @@ StepperMotor::StepperMotor(uint8_t enPin_, uint8_t dirPin_, uint8_t stepPin_, ui
 
 // Convenience ctor when you don't care about microstep control pins.
 StepperMotor::StepperMotor(uint8_t enPin_, uint8_t dirPin_, uint8_t stepPin_)
-    : StepperMotor(enPin_, dirPin_, stepPin_, 0, 0) {}
+    : StepperMotor(enPin_, dirPin_, stepPin_, 0, 0) {} 
+
 
 void StepperMotor::init() {
+    Serial.println("Initalizing Stepper Motor...");
+    
     pinMode(enPin, OUTPUT);
     // Your wiring expects HIGH here; keep behaviour identical.
+    
     digitalWrite(enPin, HIGH);
 
     if (ms1Pin) {

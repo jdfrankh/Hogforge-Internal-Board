@@ -1,22 +1,21 @@
 #include "LoaderBar.h"
 
 
-LoaderBar::LoaderBar(StepperMotor* _LeftArm, StepperMotor* _RightArm ){
+LoaderBar::LoaderBar(StepperMotor* _LeftArm, StepperMotor* _RightArm, LimitSwitch* _LoadSwitch, LimitSwitch* _ResetSwitch ){
 
     LeftArm = _LeftArm;
     RightArm = _RightArm;
+    LoadLimit = _LoadSwitch;
+    RestLimit = _ResetSwitch;
 
 }
 
 void LoaderBar::init(){
     LeftArm->init();
-    delay(50); 
+    //delay(50); 
     RightArm->init();
     LoadLimit->init();
     RestLimit->init();
-
-    LoadLimit->setCallback([this]() { this->setSwipe(0); });
-    RestLimit->setCallback([this]() { this->stopAll(); });
 
 
     setSpeed(speed);

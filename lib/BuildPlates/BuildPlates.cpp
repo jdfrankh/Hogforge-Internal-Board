@@ -1,10 +1,12 @@
 #include "BuildPlates.h"
 
 
-LoadingPlates::LoadingPlates(StepperMotor* _BuildPlate, StepperMotor* _LoadPlate){
+LoadingPlates::LoadingPlates(StepperMotor* _BuildPlate, StepperMotor* _LoadPlate, LimitSwitch* _loadPlateSwitch, LimitSwitch* _buildPlateSwitch){
 
     BuildPlate = _BuildPlate;
     LoadPlate = _LoadPlate;
+    loadPlateSwitch = _loadPlateSwitch;
+    buildPlateSwitch = _buildPlateSwitch;
 
 }
 
@@ -14,6 +16,9 @@ void LoadingPlates::init(){
 
     BuildPlate->init();
     LoadPlate->init();
+    loadPlateSwitch->init();
+    buildPlateSwitch->init();
+
 
     setSpeed(speed);
 }
