@@ -1,13 +1,15 @@
 #pragma once
-#include <StepperMotor.h>
 #include <LimitSwitch.h>
-
+#include <FastAccelStepper.h>
+#include <Axis.h>
 
 class LoaderBar {
 
     public:
 
-    LoaderBar(StepperMotor* _LeftArm, StepperMotor* _RightArm, LimitSwitch* _LoadSwitch, LimitSwitch* _ResetSwitch);
+    LoaderBar(uint8_t leftStepPin, uint8_t leftDirPin, uint8_t leftEnPin,
+              uint8_t rightStepPin, uint8_t rightDirPin, uint8_t rightEnPin,
+              LimitSwitch* _LoadSwitch, LimitSwitch* _ResetSwitch);
 
     void init();
 
@@ -23,29 +25,27 @@ class LoaderBar {
 
     void setSwipe(bool direction);
 
-
+    void readLimitSwitches();
 
     bool homing = true;
     bool headingHome = false;
 
     bool reachedEnd = false;
 
-    StepperMotor* LeftArm = nullptr;
-    StepperMotor* RightArm = nullptr;
+    FastAccelStepper* LeftArm = nullptr;
+    FastAccelStepper* RightArm = nullptr;
     LimitSwitch* LoadLimit = nullptr;
-    LimitSwitch* RestLimit = nullptr;
-
+    LimitSwitch* ResetLimit = nullptr;
 
     bool manualSwipe = false;
     private:
 
-    const int travelDistance =10000; //5500
-    int speed = StepperMotor::FAST;
+    FastAccelStepperEngine engine;
 
+    uint8_t leftStepPin, leftDirPin, leftEnPin;
+    uint8_t rightStepPin, rightDirPin, rightEnPin;
 
-    
- 
-
-    
+    const int travelDistance = 10000;
+    int speed = 1000;
 
 };

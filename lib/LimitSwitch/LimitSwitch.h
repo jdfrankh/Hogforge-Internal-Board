@@ -12,19 +12,22 @@ class LimitSwitch {
 
         void init();
 
-        static void setCallback(std::function<void()> cb);
-        static void handleInterrupt();
+        bool read();
 
         bool isPressed();
 
-    
+        void setCallback(std::function<void()> callback);
+        void checkAndCallback();
+
+        #define LIMIT_SWITCH_TRIGGERED 0
+        #define LIMIT_SWITCH_NOT_TRIGGERED 1
 
         static volatile bool triggered; // Cannot initalize static variables
 
     private:
 
         uint8_t pin = 0;
-        static std::function<void()> userCallback;
+        std::function<void()> userCallback = nullptr;
 
     
 

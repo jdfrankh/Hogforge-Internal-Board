@@ -1,7 +1,8 @@
 #pragma once
-#include <StepperMotor.h>
+//#include <StepperMotor.h>
 #include <LimitSwitch.h>
-
+#include <AccelStepper.h>
+#include <MultiStepper.h>
 
 class LoadingPlates{
 
@@ -14,10 +15,10 @@ class LoadingPlates{
 
 
 
-    LoadingPlates(StepperMotor* _BuildPlate, StepperMotor* _LoadPlate, LimitSwitch* _loadPlateSwitch, LimitSwitch* _buildPlateSwitch);
+    LoadingPlates(AccelStepper _BuildPlate, AccelStepper _LoadPlate, LimitSwitch* _loadPlateSwitch, LimitSwitch* _buildPlateSwitch);
 
-    StepperMotor* BuildPlate = nullptr;
-    StepperMotor* LoadPlate = nullptr;
+    AccelStepper BuildPlate;
+    AccelStepper LoadPlate;
     LimitSwitch* loadPlateSwitch = nullptr;
     LimitSwitch* buildPlateSwitch = nullptr;
     
@@ -37,11 +38,13 @@ class LoadingPlates{
 
     void liftAboveLip();
 
+    void readLimitSwitches();
+
     private:
 
         
 
-        int speed = StepperMotor::FAST;
+        int speed = 1000;
 
         int smallStep = 325; //65000 / 200 for 200 layers
 };
