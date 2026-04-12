@@ -9,6 +9,9 @@ we will then report an id as necessaryh
 
 */
 
+#define DEBUGMODESTART false
+#define DEBUGMODELOOP false
+
 enum IncomingCommands{
 
     HOMEALL = 0,
@@ -29,4 +32,23 @@ enum IncomingCommands{
 } incommingCommands;
 
 
+int consts LoadEN = 38, LoadSTEP = 37, LoadDIR = 36;
+int const BuildEN = 35, BuildSTEP = 34, BuildDIR = 33;
 
+int const leftEN = 38, leftDIR = 36, leftSTEP = 37;
+int const rightEN = 35, rightDIR = 33, rightSTEP = 34;
+
+long  const armHome = -100000;
+long const oneSwipedistance = 100000;
+
+long const totalPlateDistance = 300000;
+
+const int resetLimit = 3, loadLimit = 41;
+const int buildPlateLimit = 2, loadPlateLimit = 42;
+
+const int SDAPIN = 0, SCLPIN = 1;
+
+    namespace PlateID{
+        int LOADPLATE = 1;
+        int BUILDPLATE = 0;
+    }

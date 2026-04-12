@@ -83,9 +83,11 @@ public:
 
     void home();
     void resetPosition();
-    void update();
+    bool update(); // Return to see if any command is running
     void moveAxis(long position);
+    void moveSingleStepper(char* id, long position);
     void printLimitSwitchStates();
+    void printStepperStates();
     void setSpeed(Speed speed);
     void setAcceleration(int acceleration); // Change to struct
     void stop();

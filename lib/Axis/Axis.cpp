@@ -1,14 +1,6 @@
 #include "Axis.h"
 
 
-
-
-
-
-
-
-
-
 void Axis::addLimitSwitch(const char* id, int pin){
     limitSwitches->push_back(LimitSwitchItem{id, pin, this});
 }
@@ -131,6 +123,8 @@ void Axis::init(){
 
 void Axis::home(){
 
+    this->setSpeed(Speed::FAST);
+
     for (StepperMotor& stepper : *steppers){
         stepper.moveTo(homingDistance);
     }
@@ -156,11 +150,32 @@ void Axis::resetPosition(){
     }
 }
 
-void Axis::update(){
+void Axis::setSpeed(Speed speed){
+    for(StepperMotor& stepper : *steppers){
+        stepper.speed = speed;
+        if(stepper.stepper){
+            stepper.stepper->setSpeedInHz(speed);
+        }
+    }
+}
+
+bool Axis::update(){
     for(LimitSwitchItem& limitSwitch : *limitSwitches){
         limitSwitch.limitSwitch->checkAndCallback();
     }
-    delay(1);
+    
+    return this->isRunning();
+    
+}
+
+bool Axis::isRunning(){
+
+    for(StepperMotor& stepperMotor : *steppers){
+        if(stepperMotor.stepper && stepperMotor.stepper->isRunning()){
+            return true;
+        }
+    }
+    return false;
 }
 
 void Axis::printLimitSwitchStates(){
@@ -172,8 +187,33 @@ void Axis::printLimitSwitchStates(){
     }
 }
 
+void Axis::printStepperStates(){
+    for(StepperMotor& stepper : *steppers){
+        Serial.print("Stepper ");
+        Serial.print(stepper.id);
+        Serial.print(" current position: ");
+        if(stepper.stepper){
+            Serial.println(stepper.stepper->getCurrentPosition());
+        }
+        else{
+            Serial.println("Stepper not initialized");
+        }
+    }
+}
+
 void Axis::moveAxis(long position){
     for(StepperMotor& stepper : *steppers){
         stepper.moveTo(position);
     }
+}
+
+void Axis::moveSingleStepper(char*id , long position){
+    for(StepperMotor& stepper : *steppers){
+        
+        if(strcmp(stepper.id, id) == 0){
+            stepper.moveTo(position);
+            break;
+        }
+    }
+
 }

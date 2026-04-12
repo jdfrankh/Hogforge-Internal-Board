@@ -6,48 +6,27 @@
 #include "main.h"
 #include <Wire.h>
 #include <vector>
+#include <queue.h>
 
 
 
-//int leftEN = 9, leftDIR = 7, leftSTEP = 8;
-//int rightEN = 6, rightDIR = 4, rightSTEP = 5;
-
-//int LoadEN = 38;
-//int LoadSTEP = 37;
-//int LoadDIR = 36;
-
-//int BuildEN = 35, BuildSTEP = 34, BuildDIR = 33;
-
-int leftEN = 38, leftDIR = 36, leftSTEP = 37;
-int rightEN = 35, rightDIR = 33, rightSTEP = 34;
 
 I2CBus i2c;
 bool execute[3] = {false};
 bool setPlate = true;
 
+std::queue<std::vector<int>> CommandQueue;
+
+
 //============
-//loadPlate buildPlate
-//leftarm rightarm
-
-
-//StepperMotor* loadPlate = new StepperMotor(LoadEN, LoadDIR, LoadSTEP);
-//StepperMotor* buildPlate = new StepperMotor(BuildEN, BuildDIR, BuildSTEP);
-
-//LimitSwitch* loadLimit = new LimitSwitch(3);
-//LimitSwitch* resetLimit = new LimitSwitch(41);
-
-//LimitSwitch* loadPlateSwitch = new LimitSwitch(40);
-//LimitSwitch* buildPlateSwitch =  new LimitSwitch(2);
-
-//LoadingPlates* loadingSet = new LoadingPlates(buildPlate, loadPlate, loadPlateSwitch, buildPlateSwitch);
-//LoadingPlates* loadingSet = nullptr; 
-//LoaderBar arm(leftSTEP, leftDIR, leftEN, rightSTEP, rightDIR, rightEN, loadLimit, resetLimit);
 
 Axis* arm = new Axis(-100000);
 
+Axis* loadingMechanism = new Axis(-300000);
+
 void onResetLimitTriggered(){
   Serial.println("ResetLimit callback from main.cpp fired");
-  arm->moveAxis(-100000);
+  arm->moveAxis(armHome);
 }
 
 void onLoadLimitTriggered(){
@@ -63,55 +42,53 @@ void processCommand(std::vector<int> commandData){
 
   switch(commandData[0]){
     case INITALL:
-    //  loadingSet->init();
-    //  arm->init();
+      loadingMechanism->init();
+      arm->init();
     break;
     case HOMEALL:
-    //  loadingSet->homeAll();
-    //  arm->homeAll();
+      loadingMechanism->home();
+      arm->home();
     break; 
     case HOMEBAR:
-    //  arm->homeAll();
+      arm->home();
     break;
     case HOMEPLATES:
-      Serial.println("Homing Plates");
-    //  loadingSet->homeAll();
+      loadingMechanism->home();
     break;
     case LIFTONEPLATE:
-      if(commandData[1] == 0){
-     //   loadingSet->BuildPlate->setDirection(1);
-     //   loadingSet->BuildPlate->setDistance(commandData[2]);
+      if(commandData[1] == PlateID::BUILDPLATE){
+        loadingMechanism->moveSingleStepper("BuildPlateStepper", commandData[2]);
       }
-      else if(commandData[1] == 1){
-     //   loadingSet->LoadPlate->setDirection(1);
-     //   loadingSet->LoadPlate->setDistance(commandData[2]);
+      else if(commandData[1] == PlateID::LOADPLATE){
+        loadingMechanism->moveSingleStepper("LoadPlateStepper", commandData[2]);
       }
+    break;
     case LOWERONEPLATE:
-      if(commandData[1] == 0){
-     //   loadingSet->BuildPlate->setDirection(0);
-     //   loadingSet->BuildPlate->setDistance(commandData[2]);
+      if(commandData[1] == PlateID::BUILDPLATE){
+        loadingMechanism->moveSingleStepper("BuildPlateStepper", -commandData[2]);
       }
-      else if(commandData[1] == 1){
-     //   loadingSet->LoadPlate->setDirection(0);
-     //   loadingSet->LoadPlate->setDistance(commandData[2]);
+      else if(commandData[1] == PlateID::LOADPLATE){
+        loadingMechanism->moveSingleStepper("LoadPlateStepper", -commandData[2]);
+
       }
     break;
     case SMALLSTEP:
-      Serial.print("Moving a small step:"); Serial.println(commandData[1]);
-    //  loadingSet->miniStep(300, false); // commandData[1]
+        loadingMechanism->moveAxis(commandData[2]);
 
     break;
     case RAISEBOTHPLATES:
-    //  loadingSet->liftBothPlates();
+        loadingMechanism->moveSingleStepper("BuildPlateStepper", totalPlateDistance);
+        loadingMechanism->moveSingleStepper("LoadPlateStepper", totalPlateDistance);
+
     break;
     case PREPPRINT:
-    Serial.println("Prepping for Print");
-    //  loadingSet->prepForPrint(commandData[1]); // The print hieght is determined by the lead of the screw and the steps it takes
+    //Serial.println("Prepping for Print");
+        loadingMechanism->home();
+        arm->home();
     break;
     case MOVEBAR:
-    //  arm->manualSwipe = true; 
-    //  arm->startSwipe();
-    arm->moveAxis(100000);
+;
+      arm->moveAxis(oneSwipedistance);
     break; 
     default:
 
@@ -125,14 +102,17 @@ void processCommand(std::vector<int> commandData){
 void setup() {
   Serial.begin(115200);
 
-
+  #if DEBUGMODESTART
   delay(4000);
+
   Serial.println("Homing All...");
   
-  i2c.init(0,1);
+  #endif
+
+  i2c.init(SDAPIN,SCLPIN);
   Serial.println("Initializing Loader Bar...");
-  arm->addLimitSwitch("ResetLimit", 3);
-  arm->addLimitSwitch("LoadLimit", 41);
+  arm->addLimitSwitch("ResetLimit", resetLimit);
+  arm->addLimitSwitch("LoadLimit", loadLimit);
 
   arm->setLimitSwitchCallback("ResetLimit", onResetLimitTriggered);
   arm->setLimitSwitchCallback("LoadLimit", onLoadLimitTriggered);
@@ -140,68 +120,62 @@ void setup() {
   arm->addStepper("LeftStepper", std::vector<int>{leftSTEP, leftDIR, leftEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_NORMAL);
   arm->addStepper("RightStepper", std::vector<int>{rightSTEP, rightDIR, rightEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_REVERSE);
 
-  Serial.println("Initializing Axis...");
+
+  #if DEBUGMODESTART
+    Serial.println("Initializing Axis...");
+  #endif
 
   arm->init();
-  //arm.init(); 
-  //loadingSet->init();
 
-  delay(2000); 
-  Serial.println("Homing Loader Bar...");
+  loadingMechanism->addLimitSwitch("BuildPlateLimit", buildPlateLimit);
+  loadingMechanism->addLimitSwitch("LoadPlateLimit", loadPlateLimit);
+  loadingMechanism->addStepper("BuildPlateStepper", std::vector<int>{BuildSTEP, BuildDIR, BuildEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_NORMAL);
+  loadingMechanism->addStepper("LoadPlateStepper", std::vector<int>{LoadSTEP, LoadDIR, LoadEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_NORMAL);
+
+  loadingMechanism->init();
+
+  #if DEBUGMODESTART
+    delay(2000); 
+    Serial.println("Homing Loader Bar...");
+  #endif
+
   arm->home();
+  loadingMechanism->home();
 
-  //arm->homeAll();
-  //loadingSet->homeAll();
-  //loadingSet->liftBothPlates();
- //loadingSet->setSpeed(StepperMotor::MEDIUM);
-  
- // arm->setSwipe(1);
- 
-  //arm->setSpeed(StepperMotor::FAST);
-
-  
-
-  
-  //while(loadingSet->homing){// || ){
-  //  loadingSet->update();
-   // arm->update();
-  //}
-
-  //loadingSet->liftBothPlates();
- // loadingSet->liftAboveLip();
-
-  //while(true){// || ){
-  //  loadingSet->update();
-   // arm->update();
-  //}
-
-  // while(!arm->homing){
-  //  arm->update();
-  //}
-  
-
-  //loadingSet->prepForPrint();
- // loadingSet->miniStep();
- // arm->startSwipe();
  
 }
 
 void loop() {
 
-  arm->update();
-  //Serial.println("Looping...");
-  //arm->printLimitSwitchStates();
-  //arm.readLimitSwitches();
-  //loadingSet->readLimitSwitches();
-  //delay(1000);
-  //arm->update();
-  //loadingSet->update();
+  
+  
 
 
- //if(i2c.isNewData()){
- //   Serial.println("Executing command:");
- //   processCommand(i2c.getNewData());
- // }
+  #if DEBUGMODELOOP 
+    Serial.println("-------------------------------------");
+    arm->printLimitSwitchStates();
+    loadingMechanism->printLimitSwitchStates();
+
+  #else
+    
+  
+  if(!arm->update() && loadingMechanism->update()){ // Steppers are finished running
+    if(!CommandQueue.empty()){
+      processCommand(CommandQueue.front());
+      CommandQueue.pop();
+    }
+  }
+
+
+  #endif
+  delay(1);
+
+
+ if(i2c.isNewData()){
+   CommandQueue.push(i2c.getNewData());
+    //Serial.println("Executing command:");
+    //processCommand(i2c.getNewData());
+  }
 
   //Serial.printf("Queue %d ,Arm: %d,Bar: %d", i2c.isNewData(), arm->update(), loadingSet->update());
   //Serial.println();
