@@ -25,12 +25,16 @@ Axis* arm = new Axis(-100000);
 Axis* loadingMechanism = new Axis(-300000);
 
 void onResetLimitTriggered(){
-  Serial.println("ResetLimit callback from main.cpp fired");
+  #if DEBUGMODELOOP
+    Serial.println("ResetLimit callback from main.cpp fired");
+  #endif
   arm->moveAxis(armHome);
 }
 
 void onLoadLimitTriggered(){
-  Serial.println("LoadLimit callback from main.cpp fired");
+  #if DEBUGMODELOOP
+    Serial.println("LoadLimit callback from main.cpp fired");
+  #endif
   arm->stop();
   arm->resetPosition();
 }
@@ -129,6 +133,22 @@ void setup() {
 
   loadingMechanism->addLimitSwitch("BuildPlateLimit", buildPlateLimit);
   loadingMechanism->addLimitSwitch("LoadPlateLimit", loadPlateLimit);
+
+  loadingMechanism->setLimitSwitchCallback("BuildPlateLimit", [](){
+    #if DEBUGMODELOOP
+      Serial.println("BuildPlateLimit callback from main.cpp fired");
+    #endif
+    loadingMechanism->stop();
+  });
+
+  loadingMechanism->setLimitSwitchCallback("LoadPlateLimit", [](){
+    #if DEBUGMODELOOP
+      Serial.println("LoadPlateLimit callback from main.cpp fired");
+    #endif
+    loadingMechanism->stop();
+  });
+
+  
   loadingMechanism->addStepper("BuildPlateStepper", std::vector<int>{BuildSTEP, BuildDIR, BuildEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_NORMAL);
   loadingMechanism->addStepper("LoadPlateStepper", std::vector<int>{LoadSTEP, LoadDIR, LoadEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_NORMAL);
 
@@ -140,7 +160,13 @@ void setup() {
   #endif
 
   arm->home();
-  loadingMechanism->home();
+  //loadingMechanism->home();
+
+ // CommandQueue.push(std::vector<int>{HOMEALL});
+
+  //CommandQueue.push(std::vector<int>{LISTONEPLATE, PlateID::BUILDPLATE, 100000});
+
+
 
  
 }
@@ -157,7 +183,8 @@ void loop() {
     loadingMechanism->printLimitSwitchStates();
 
   #else
-    
+  
+  /**/
   
   if(!arm->update() && loadingMechanism->update()){ // Steppers are finished running
     if(!CommandQueue.empty()){
@@ -166,9 +193,12 @@ void loop() {
     }
   }
 
-
+  arm->moveSingleStepper("LeftStepper", 0); // -1000 1000 
   #endif
   delay(1);
+
+
+
 
 
  if(i2c.isNewData()){
@@ -177,6 +207,12 @@ void loop() {
     //processCommand(i2c.getNewData());
   }
 
+
+
+  
+
+
+  //delay(2000000);
   //Serial.printf("Queue %d ,Arm: %d,Bar: %d", i2c.isNewData(), arm->update(), loadingSet->update());
   //Serial.println();
   //arm->update();

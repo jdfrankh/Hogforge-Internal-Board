@@ -110,11 +110,13 @@ void Axis::init(){
 
     this->engine->init();
 
-    for(StepperMotor& stepper : *steppers){
-        stepper.init(*engine);
-    }
+    
     for(LimitSwitchItem& limitSwitch : *limitSwitches){
         limitSwitch.init();
+    }
+
+    for(StepperMotor& stepper : *steppers){
+        stepper.init(*engine);
     }
 
 
