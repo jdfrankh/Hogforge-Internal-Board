@@ -7,7 +7,8 @@
 #include <Wire.h>
 #include <vector>
 #include <queue.h>
-
+#include <Fan.h> 
+#include <O2Sensor.h>
 
 
 
@@ -17,7 +18,9 @@ bool setPlate = true;
 
 std::queue<std::vector<int>> CommandQueue;
 
+std::vector<Fan*> circulationFan = {new Fan("CirculationFanLeft", FANLEFTPWM1, FANLEFTPWM2), new Fan("CirculationFanRight", FANRIGHTPWM1, FANRIGHTPWM2)};
 
+O2Sensor sensor;
 //============
 
 Axis* arm = new Axis(-100000);
@@ -76,6 +79,18 @@ void processCommand(std::vector<int> commandData){
 
       }
     break;
+    case STARTFAN:
+      for(Fan* fan : circulationFan){
+        fan->setSpeed(Fan::Speeds::SPEED_MEDIUM, Fan::Direction::FORWARD);
+      }
+    break;
+
+    case STOPFAN:
+      for(Fan* fan : circulationFan){
+        fan->stop();
+      }
+    break;
+
     case SMALLSTEP:
         loadingMechanism->moveAxis(commandData[2]);
 
@@ -112,6 +127,14 @@ void setup() {
   Serial.println("Homing All...");
   
   #endif
+
+  for (Fan* fan : circulationFan){
+    fan->setup();
+    fan->setBreakType(Fan::BreakType::BRAKE);
+   // fan->setSpeed(Speeds::MEDIUM, Direction::FORWARD);
+  }
+
+  //sensor.setup();
 
   i2c.init(SDAPIN,SCLPIN);
   Serial.println("Initializing Loader Bar...");
@@ -158,6 +181,7 @@ void setup() {
     delay(2000); 
     Serial.println("Homing Loader Bar...");
   #endif
+
 
   arm->home();
   //loadingMechanism->home();
