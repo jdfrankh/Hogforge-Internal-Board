@@ -9,7 +9,7 @@ we will then report an id as necessaryh
 
 */
 
-#define DEBUGMODESTART false
+#define DEBUGMODESTART true
 #define DEBUGMODELOOP false
 
 enum IncomingCommands{
@@ -40,8 +40,8 @@ int const BuildEN = 6, BuildSTEP = 5, BuildDIR = 4;
 int const leftEN = 38, leftDIR = 36, leftSTEP = 37;
 int const rightEN = 35, rightDIR = 33, rightSTEP = 34;
 
-int const FANLEFTPWM1 = 5, FANLEFTPWM2 = 6;
-int const FANRIGHTPWM1 = 7, FANRIGHTPWM2 = 8;
+int const FANLEFTPWM1 = 10, FANLEFTPWM2 = 11;
+int const FANRIGHTPWM1 = 12, FANRIGHTPWM2 = 13;
 
 long  const armHome = -100000;
 long const oneSwipedistance = 100000;

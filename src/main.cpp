@@ -28,14 +28,14 @@ Axis* arm = new Axis(-100000);
 Axis* loadingMechanism = new Axis(-300000);
 
 void onResetLimitTriggered(){
-  #if DEBUGMODELOOP
+  #if DEBUGMODESTART
     Serial.println("ResetLimit callback from main.cpp fired");
   #endif
   arm->moveAxis(armHome);
 }
 
 void onLoadLimitTriggered(){
-  #if DEBUGMODELOOP
+  #if DEBUGMODESTART
     Serial.println("LoadLimit callback from main.cpp fired");
   #endif
   arm->stop();
@@ -202,27 +202,23 @@ void loop() {
 
 
   #if DEBUGMODELOOP 
-    Serial.println("-------------------------------------");
-    arm->printLimitSwitchStates();
-    loadingMechanism->printLimitSwitchStates();
+    //Serial.println("-------------------------------------");
+    //arm->printLimitSwitchStates();
+    //loadingMechanism->printLimitSwitchStates();
 
   #else
   
-  /**/
   
+  #endif
+  delay(1);
+
+
   if(!arm->update() && loadingMechanism->update()){ // Steppers are finished running
     if(!CommandQueue.empty()){
       processCommand(CommandQueue.front());
       CommandQueue.pop();
     }
   }
-
-  arm->moveSingleStepper("LeftStepper", 0); // -1000 1000 
-  #endif
-  delay(1);
-
-
-
 
 
  if(i2c.isNewData()){

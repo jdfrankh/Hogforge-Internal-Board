@@ -89,10 +89,13 @@ void Axis::StepperMotor::init(FastAccelStepperEngine& engine) {
 
 void Axis::StepperMotor::moveTo(long position){
     if(stepper){
-     //   Serial.print("Moving stepper ");
-     //   Serial.print(id);
-     //   Serial.print(" to position ");
-     //   Serial.println(position);
+
+
+        Serial.print("Moving stepper ");
+        Serial.print(id);
+        Serial.print(" to position ");
+        Serial.println(position);
+
 
         direction ? stepper->moveTo(position) : stepper->moveTo(-position);
     }
@@ -106,11 +109,27 @@ Axis::Axis(int homingDistance)
 
 
 void Axis::init(){
-    this->engine = new FastAccelStepperEngine();
+    // FastAccelStepper keeps a process-global StepperQueue array (`fas_queue[]`)
+    // and FastAccelStepperEngine::init() unconditionally calls _initVars() on
+    // every entry of that array.  _initVars() zeroes driver_data, which is the
+    // pointer the MCPWM/PCNT backend dereferences from inside StepperTask
+    // (isReadyForCommands_mcpwm_pcnt -> mapping->mcpwm_unit).  If a second
+    // FastAccelStepperEngine is ever init()'d, it wipes the queues that the
+    // first engine has already bound to real MCPWM units, and the first
+    // engine's StepperTask null-derefs on the next motion command
+    // (LoadProhibited @ EXCVADDR=0x00000000).
+    //
+    // The library therefore requires exactly ONE engine per process.  Use a
+    // function-local static so every Axis instance shares the same engine and
+    // engine.init() is only ever called once.
+    static FastAccelStepperEngine sharedEngine;
+    static bool sharedEngineInited = false;
+    if (!sharedEngineInited) {
+        sharedEngine.init();
+        sharedEngineInited = true;
+    }
+    engine = &sharedEngine;
 
-    this->engine->init();
-
-    
     for(LimitSwitchItem& limitSwitch : *limitSwitches){
         limitSwitch.init();
     }
@@ -125,9 +144,16 @@ void Axis::init(){
 
 void Axis::home(){
 
-    this->setSpeed(Speed::FAST);
+    #if DEBUGMODELOOP
+        Serial.println("Homing Axis...");
+    #endif
 
-    for (StepperMotor& stepper : *steppers){
+    // Not source of crash
+    //this->setSpeed(Speed::FAST);
+
+    for (StepperMotor& stepper : *this->steppers){
+        Serial.print("Homing stepper ");
+        Serial.println(stepper.id);
         stepper.moveTo(homingDistance);
     }
 
