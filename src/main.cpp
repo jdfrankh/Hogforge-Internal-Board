@@ -9,6 +9,27 @@
 #include <queue.h>
 #include <Fan.h> 
 #include <O2Sensor.h>
+#include <HardwareSerial.h>
+#include <TMCStepper.h>
+
+// ---- TMC2209 UART for the BuildPlate (broken STEP/DIR -> driven via VACTUAL) ----
+// UART2 is unused on the XIAO ESP32-S3 and can be remapped to any GPIO.
+HardwareSerial TMCSerial(2);
+TMC2209Stepper drvBuild(&TMCSerial, TMC_RSENSE, BUILD_TMC_ADDR);
+TMC2209Stepper drvLoad (&TMCSerial, TMC_RSENSE, LOAD_TMC_ADDR);
+
+static void configureTMC(TMC2209Stepper& d) {
+    d.begin();
+    d.toff(5);
+    d.blank_time(24);
+    d.rms_current(300, 0.5f);
+    d.microsteps(16);
+    d.intpol(true);
+    d.pdn_disable(true);       // REQUIRED so PDN_UART acts as UART, not standby
+    d.mstep_reg_select(true);  // microsteps come from UART, not MS1/MS2 pins
+    d.I_scale_analog(false);   // use internal Vref, ignore VREF pin
+    d.en_spreadCycle(false);   // StealthChop
+}
 
 
 
@@ -32,14 +53,51 @@ void onResetLimitTriggered(){
     Serial.println("ResetLimit callback from main.cpp fired");
   #endif
   arm->moveAxis(armHome);
+  arm->setHome(true);
 }
 
 void onLoadLimitTriggered(){
+
+  //if(arm->getHome()){
+  //  return; // If we're already at home, ignore further triggers (e.g. from bouncing)
+  //}
+
   #if DEBUGMODESTART
     Serial.println("LoadLimit callback from main.cpp fired");
   #endif
   arm->stop();
   arm->resetPosition();
+  arm->setHome(false);
+}
+
+
+void onBuildPlateLimitTriggered(){
+
+  //if(loadingMechanism->getHome("BuildPlateStepper")){
+  //  return; }// If we're already at home, ignore further triggers (e.g. from bouncing)
+
+  #if DEBUGMODESTART
+  //  Serial.println("BuildPlateLimit callback from main.cpp fired");
+  #endif
+  loadingMechanism->stop("BuildPlateStepper");
+  loadingMechanism->resetPosition("BuildPlateStepper");
+  loadingMechanism->setHome(false, "BuildPlateStepper");
+}
+
+
+void onLoadPlateLimitTriggered(){
+
+  //if(loadingMechanism->getHome("LoadPlateStepper")){
+  //  return; // If we're already at home, ignore further triggers (e.g. from bouncing)
+  //}
+
+
+  #if DEBUGMODESTART
+  //  Serial.println("LoadPlateLimit callback from main.cpp fired");
+  #endif
+  loadingMechanism->stop("LoadPlateStepper");
+  loadingMechanism->resetPosition("LoadPlateStepper");
+  loadingMechanism->setHome(false, "LoadPlateStepper");
 }
 
 
@@ -138,6 +196,7 @@ void setup() {
 
   i2c.init(SDAPIN,SCLPIN);
   Serial.println("Initializing Loader Bar...");
+
   arm->addLimitSwitch("ResetLimit", resetLimit);
   arm->addLimitSwitch("LoadLimit", loadLimit);
 
@@ -154,26 +213,23 @@ void setup() {
 
   arm->init();
 
-  loadingMechanism->addLimitSwitch("BuildPlateLimit", buildPlateLimit);
-  loadingMechanism->addLimitSwitch("LoadPlateLimit", loadPlateLimit);
+  loadingMechanism->addLimitSwitch("BuildPlateLimit", buildPlateLimit, "BuildPlateStepper");
+  loadingMechanism->addLimitSwitch("LoadPlateLimit", loadPlateLimit, "LoadPlateStepper");
 
-  loadingMechanism->setLimitSwitchCallback("BuildPlateLimit", [](){
-    #if DEBUGMODELOOP
-      Serial.println("BuildPlateLimit callback from main.cpp fired");
-    #endif
-    loadingMechanism->stop();
-  });
-
-  loadingMechanism->setLimitSwitchCallback("LoadPlateLimit", [](){
-    #if DEBUGMODELOOP
-      Serial.println("LoadPlateLimit callback from main.cpp fired");
-    #endif
-    loadingMechanism->stop();
-  });
+  loadingMechanism->setLimitSwitchCallback("BuildPlateLimit", onBuildPlateLimitTriggered);
+  loadingMechanism->setLimitSwitchCallback("LoadPlateLimit", onLoadPlateLimitTriggered);
 
   
-  loadingMechanism->addStepper("BuildPlateStepper", std::vector<int>{BuildSTEP, BuildDIR, BuildEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_NORMAL);
-  loadingMechanism->addStepper("LoadPlateStepper", std::vector<int>{LoadSTEP, LoadDIR, LoadEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_NORMAL);
+  loadingMechanism->addStepper("BuildPlateStepper", std::vector<int>{BuildSTEP, BuildDIR, BuildEN}, Axis::StepperMotor::Speed::MEDIUM, Axis::StepperMotor::Direction::DIR_NORMAL); // This hardware may be a problem
+  loadingMechanism->addStepper("LoadPlateStepper", std::vector<int>{LoadSTEP, LoadDIR, LoadEN}, Axis::StepperMotor::Speed::MEDIUM, Axis::StepperMotor::Direction::DIR_REVERSE); // DIR_REVERSE for Load , DIR_NORMAL for Build?
+
+  // ---- Bring up the TMC2209 UART bus and switch BuildPlate to UART control. ----
+  // Done BEFORE loadingMechanism->init() so the FastAccelStepper backend skips
+  // the (broken) BuildPlate STEP pin entirely.
+  TMCSerial.begin(TMC_BAUD, SERIAL_8N1, TMC_RX_PIN, TMC_TX_PIN);
+  configureTMC(drvLoad);
+  configureTMC(drvBuild);
+  loadingMechanism->setStepperUart("BuildPlateStepper", &drvBuild, BUILD_VACTUAL);
 
   loadingMechanism->init();
 
@@ -183,10 +239,16 @@ void setup() {
   #endif
 
 
-  arm->home();
+  //arm->home();
   //loadingMechanism->home();
 
- // CommandQueue.push(std::vector<int>{HOMEALL});
+ // for(Fan* fan : circulationFan){
+ //   fan->setSpeed(Fan::Speeds::SPEED_MAX, Fan::Direction::FORWARD);
+ // }
+ CommandQueue.push(std::vector<int>{HOMEALL});
+
+ CommandQueue.push(std::vector<int>{RAISEBOTHPLATES, totalPlateDistance});
+
 
   //CommandQueue.push(std::vector<int>{LISTONEPLATE, PlateID::BUILDPLATE, 100000});
 
@@ -206,6 +268,13 @@ void loop() {
     //arm->printLimitSwitchStates();
     //loadingMechanism->printLimitSwitchStates();
 
+    static uint32_t t = 0;
+    if (millis() - t > 500) {
+        t = millis();
+        loadingMechanism->printLimitSwitchStates();
+        loadingMechanism->printStepperStates();
+    }
+
   #else
   
   
@@ -213,7 +282,12 @@ void loop() {
   delay(1);
 
 
-  if(!arm->update() && loadingMechanism->update()){ // Steppers are finished running
+  // update() returns true while a stepper is still moving. Dispatch the next
+  // queued command only when BOTH axes are idle. Note: update() must run every
+  // loop unconditionally so limit switches are polled.
+  bool armBusy  = arm->update();
+  bool loadBusy = loadingMechanism->update();
+  if(!armBusy && !loadBusy){
     if(!CommandQueue.empty()){
       processCommand(CommandQueue.front());
       CommandQueue.pop();

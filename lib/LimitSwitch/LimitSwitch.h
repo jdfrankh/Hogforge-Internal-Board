@@ -17,7 +17,7 @@ class LimitSwitch {
         bool isPressed();
 
         void setCallback(std::function<void()> callback);
-        void checkAndCallback();
+        void checkAndCallback(bool prepToMove = true);
 
         #define LIMIT_SWITCH_TRIGGERED 0
         #define LIMIT_SWITCH_NOT_TRIGGERED 1
@@ -28,6 +28,7 @@ class LimitSwitch {
 
         uint8_t pin = 0;
         std::function<void()> userCallback = nullptr;
+        bool lastPressed = false; // for edge detection in checkAndCallback()
 
     
 

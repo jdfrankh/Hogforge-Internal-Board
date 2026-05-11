@@ -10,7 +10,7 @@ we will then report an id as necessaryh
 */
 
 #define DEBUGMODESTART true
-#define DEBUGMODELOOP false
+#define DEBUGMODELOOP true
 
 enum IncomingCommands{
 
@@ -46,12 +46,26 @@ int const FANRIGHTPWM1 = 12, FANRIGHTPWM2 = 13;
 long  const armHome = -100000;
 long const oneSwipedistance = 100000;
 
-long const totalPlateDistance = 300000;
+long const buildingDistance = 110000; // Total plate distance for the load and build plates.
+long const totalPlateDistance = 120000; // Total plate distance for the load and build plates. 
 
 const int resetLimit = 3, loadLimit = 40;
 const int buildPlateLimit = 2, loadPlateLimit = 42;
 
 const int SDAPIN = 0, SCLPIN = 1;
+
+// ---- TMC2209 UART (BuildPlateStepper has broken STEP/DIR; driven via UART VACTUAL) ----
+int   const TMC_RX_PIN  = 18;     // MCU RX <- PDN_UART (direct)
+int   const TMC_TX_PIN  = 17;     // MCU TX -> PDN_UART (through 1k pull-up)
+long  const TMC_BAUD    = 115200;
+float const TMC_RSENSE  = 0.11f;  // BTT/FYSETC carrier default
+// MS1/MS2 jumpers must select these slave addresses on the carriers:
+//   BuildPlate driver: MS1=GND, MS2=GND -> address 0
+//   LoadPlate  driver: MS1=VCC, MS2=VCC -> address 3
+uint8_t const BUILD_TMC_ADDR = 0;
+uint8_t const LOAD_TMC_ADDR  = 3;
+// ~2800 LSB * 0.715 Hz/LSB ~= 2000 microsteps/s, matching Axis::Speed::MEDIUM.
+int32_t const BUILD_VACTUAL  = 2800;
 
     namespace PlateID{
         int LOADPLATE = 1;

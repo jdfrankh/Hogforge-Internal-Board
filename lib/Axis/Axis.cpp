@@ -1,8 +1,13 @@
 #include "Axis.h"
+#include <TMCStepper.h>
+
+// VACTUAL is in units of (f_clk / 2^24). At the internal 12 MHz clock this is
+// ~0.7152557 microsteps/s per LSB.
+static constexpr float VACTUAL_HZ_PER_LSB = 12000000.0f / 16777216.0f;
 
 
-void Axis::addLimitSwitch(const char* id, int pin){
-    limitSwitches->push_back(LimitSwitchItem{id, pin, this});
+void Axis::addLimitSwitch(const char* id, int pin, const char* targetStepperId){
+    limitSwitches->push_back(LimitSwitchItem{id, pin, this, targetStepperId});
 }
 
 void Axis::removeLimitSwitch(const char* id){
@@ -32,6 +37,20 @@ void Axis::addStepper(const char* id,std::vector<int> pins, int speed, bool dire
 
 }
 
+void Axis::setStepperUart(const char* id, TMC2209Stepper* driver, int32_t vactual){
+    for(StepperMotor& s : *steppers){
+        if(strcmp(s.id, id) == 0){
+            s.uartMode = true;
+            s.tmcDriver = driver;
+            s.uartVactual = vactual;
+            return;
+        }
+    }
+    Serial.print("setStepperUart: no stepper named ");
+    Serial.println(id);
+}
+
+
 void Axis::removeStepper(const char* id){
     for(StepperMotor& stepper : *steppers){
         if(strcmp(stepper.id, id) == 0){ // Check to see if there is any mismatch with the id
@@ -53,8 +72,15 @@ void Axis::LimitSwitchItem::init(){
        // Serial.print("Limit switch triggered: ");
        // Serial.println(id);
 
-        axis->stop();
-        axis->resetPosition();
+        // If a target stepper was supplied, only stop and zero that one.
+        // Otherwise fall back to stopping the whole axis.
+        //if (targetStepperId) {
+        //    axis->stop(const_cast<char*>(targetStepperId));
+        //    axis->resetPosition(const_cast<char*>(targetStepperId));
+        //} else {
+        //    axis->stop();
+        //    axis->resetPosition();
+        //}
 
         if(onTriggered){
             onTriggered();
@@ -66,6 +92,10 @@ void Axis::LimitSwitchItem::init(){
 
 
 void Axis::StepperMotor::init(FastAccelStepperEngine& engine) {
+    if (uartMode) {
+        // No STEP/DIR backend; the chip is driven via UART VACTUAL writes.
+        return;
+    }
     if (pins.size() < 3) {
         Serial.println("Not enough pins provided to initialize stepper");
 
@@ -88,6 +118,41 @@ void Axis::StepperMotor::init(FastAccelStepperEngine& engine) {
 }
 
 void Axis::StepperMotor::moveTo(long position){
+    if (uartMode) {
+        if (!tmcDriver) return;
+
+        long delta = position - currentPosition;
+        if (delta == 0) { lastMoveSign = 0; return; }
+
+        // Map user direction onto VACTUAL sign the same way the FastAccelStepper
+        // backend does for the STEP/DIR variant: DIR_REVERSE (true) keeps the
+        // sign, DIR_NORMAL (false) flips it.
+        int sign = (delta > 0) ? +1 : -1;
+        int vactualSign = direction ? sign : -sign;
+        int32_t v = vactualSign * uartVactual;
+
+        positionBeforeMove   = currentPosition;
+        targetPosition       = position;
+        moveStartMs          = millis();
+        expectedDurationMs   = (uint32_t)((float)labs(delta) * 1000.0f /
+                                          ((float)uartVactual * VACTUAL_HZ_PER_LSB));
+        moving               = true;
+        lastMoveSign         = (int8_t)sign;
+
+        Serial.print("Moving (UART) stepper ");
+        Serial.print(id);
+        Serial.print(" to ");
+        Serial.print(position);
+        Serial.print(" via VACTUAL=");
+        Serial.print(v);
+        Serial.print(" for ~");
+        Serial.print(expectedDurationMs);
+        Serial.println(" ms");
+
+        tmcDriver->VACTUAL(v);
+        return;
+    }
+
     if(stepper){
 
 
@@ -96,9 +161,73 @@ void Axis::StepperMotor::moveTo(long position){
         Serial.print(" to position ");
         Serial.println(position);
 
+        long signedTarget = direction ? position : -position;
+        long delta = signedTarget - stepper->getCurrentPosition();
+        lastMoveSign = (delta > 0) ? +1 : (delta < 0 ? -1 : 0);
 
-        direction ? stepper->moveTo(position) : stepper->moveTo(-position);
+        stepper->moveTo(signedTarget);
     }
+}
+
+void Axis::StepperMotor::stop(){
+    if (uartMode) {
+        if (tmcDriver) tmcDriver->VACTUAL(0);
+        if (moving) {
+            unsigned long elapsed = millis() - moveStartMs;
+            if (expectedDurationMs == 0 || elapsed >= expectedDurationMs) {
+                currentPosition = targetPosition;
+            } else {
+                float frac = (float)elapsed / (float)expectedDurationMs;
+                currentPosition = positionBeforeMove +
+                    (long)(frac * (float)(targetPosition - positionBeforeMove));
+            }
+            moving = false;
+        }
+        lastMoveSign = 0;
+        return;
+    }
+
+    if (stepper) stepper->stopMove();
+    lastMoveSign = 0;
+}
+
+bool Axis::StepperMotor::isRunning(){
+    if (uartMode) return moving;
+    return stepper && stepper->isRunning();
+}
+
+void Axis::StepperMotor::resetPosition(){
+    if (uartMode) {
+        currentPosition = 0;
+        positionBeforeMove = 0;
+        targetPosition = 0;
+        moving = false;
+        if (tmcDriver) tmcDriver->VACTUAL(0);
+        return;
+    }
+    if (stepper) stepper->setCurrentPosition(0);
+}
+
+void Axis::StepperMotor::update(){
+    if (!uartMode || !moving) return;
+    if (millis() - moveStartMs >= expectedDurationMs) {
+        if (tmcDriver) tmcDriver->VACTUAL(0);
+        currentPosition = targetPosition;
+        moving = false;
+    }
+}
+
+long Axis::StepperMotor::getCurrentPosition(){
+    if (uartMode) {
+        if (!moving) return currentPosition;
+        unsigned long elapsed = millis() - moveStartMs;
+        if (expectedDurationMs == 0) return currentPosition;
+        if (elapsed >= expectedDurationMs) return targetPosition;
+        float frac = (float)elapsed / (float)expectedDurationMs;
+        return positionBeforeMove +
+               (long)(frac * (float)(targetPosition - positionBeforeMove));
+    }
+    return stepper ? stepper->getCurrentPosition() : 0;
 }
 
 Axis::Axis(int homingDistance)
@@ -106,6 +235,8 @@ Axis::Axis(int homingDistance)
       limitSwitches(new std::vector<LimitSwitchItem>()),
       homingDistance(homingDistance) {
 }
+
+
 
 
 void Axis::init(){
@@ -138,9 +269,44 @@ void Axis::init(){
         stepper.init(*engine);
     }
 
-
 }
 
+void Axis::setHome(bool value, char* id){
+    if(id){
+        for(StepperMotor& stepper : *steppers){
+            if(strcmp(stepper.id, id) == 0){
+                stepper.isHoming = value;
+                break;
+            }
+        }
+        return;
+    }
+
+    // Reset all positions of all motors
+    for(StepperMotor& stepperMotor : *steppers){
+        stepperMotor.isHoming = false;
+    }
+}
+
+
+bool Axis::getHome(char* id){
+    if(id){
+        for(StepperMotor& stepper : *steppers){
+            if(strcmp(stepper.id, id) == 0){
+                return stepper.isHoming;
+            }
+        }
+        return false;
+    }
+
+    // Return true only if all motors are at home
+    for(StepperMotor& stepperMotor : *steppers){
+        if(!stepperMotor.isHoming){
+            return false;
+        }
+    }
+    return true;
+}
 
 void Axis::home(){
 
@@ -151,30 +317,50 @@ void Axis::home(){
     // Not source of crash
     //this->setSpeed(Speed::FAST);
 
+
+
     for (StepperMotor& stepper : *this->steppers){
         Serial.print("Homing stepper ");
         Serial.println(stepper.id);
         stepper.moveTo(homingDistance);
+        stepper.isHoming = true;
     }
 
 
 }
 
 
-void Axis::stop(){
+void Axis::stop(char* id){ // An optional id can be supplied to stop a single stepper
+    if(id){
+        for(StepperMotor& stepper : *steppers){
+            if(strcmp(stepper.id, id) == 0){
+                stepper.stop();
+                return;
+            }
+        }
+    }
+
     for(StepperMotor& stepper : *steppers){
-        if(stepper.stepper){
-            stepper.stepper->stopMove();
-        }
+        stepper.stop();
     }
 
 }
 
-void Axis::resetPosition(){
-    for(StepperMotor& stepperMotor : *steppers){
-        if(stepperMotor.stepper){
-            stepperMotor.stepper->setCurrentPosition(0);
+void Axis::resetPosition(char* id){ // An optional id can be supplied to reset the position of a single stepper
+
+    if(id){
+        for(StepperMotor& stepper : *steppers){
+            if(strcmp(stepper.id, id) == 0){
+                stepper.resetPosition();
+                break;
+            }
         }
+        return;
+    }
+
+    // Reset all positions of all motors
+    for(StepperMotor& stepperMotor : *steppers){
+        stepperMotor.resetPosition();
     }
 }
 
@@ -189,17 +375,74 @@ void Axis::setSpeed(Speed speed){
 
 bool Axis::update(){
     for(LimitSwitchItem& limitSwitch : *limitSwitches){
-        limitSwitch.limitSwitch->checkAndCallback();
+        limitSwitch.limitSwitch->checkAndCallback(getHome());
+    }
+
+    // Held-switch failsafe: the edge-triggered callback above only fires on a
+    // not-pressed -> pressed transition. If a move is commanded while the
+    // switch is already held (e.g. you hit "home" twice, or the axis was
+    // resting on the switch at boot), the rising edge never happens and the
+    // motor would otherwise drive into the limit.
+    //
+    // Direction-aware: only stop a move that is heading INTO the limit
+    // (same sign as the axis homingDistance). A move heading AWAY from the
+    // limit is exactly what the user wants when leaving home, so leave it
+    // alone. This is what allows commanding a move off a held switch.
+    int8_t homingSign = (homingDistance > 0) ? +1 : (homingDistance < 0 ? -1 : 0);
+    for(LimitSwitchItem& limitSwitch : *limitSwitches){
+        if (!limitSwitch.limitSwitch->read()) continue;
+
+        // Find the protected stepper(s) and check direction of travel.
+        bool stopThisOne = false;
+        for(StepperMotor& s : *steppers){
+            if (limitSwitch.targetStepperId &&
+                strcmp(limitSwitch.targetStepperId, s.id) != 0) continue;
+            if (!s.isRunning()) continue;
+            if (s.lastMoveSign == 0) continue;
+            if (s.lastMoveSign == homingSign) {
+                stopThisOne = true;
+                break;
+            }
+        }
+        if (stopThisOne && limitSwitch.onTriggered) {
+            limitSwitch.onTriggered();
+        }
+    }
+
+    for(StepperMotor& stepperMotor : *steppers){
+        stepperMotor.update();
     }
     
     return this->isRunning();
     
 }
 
-bool Axis::isRunning(){
+bool Axis::isLimitSwitchPressed(const char* id){
+    if (!id) return false;
+    for (LimitSwitchItem& sw : *limitSwitches){
+        if (strcmp(sw.id, id) == 0){
+            return sw.limitSwitch->read();
+        }
+    }
+    return false;
+}
+
+bool Axis::isRunning(char* id){
+    if (id)
+    {
+        for(StepperMotor& stepperMotor : *steppers){
+            if(strcmp(stepperMotor.id, id) == 0){
+                if(stepperMotor.isRunning()){
+                    return true;
+                }
+                break;
+            }
+        }
+    }
+    
 
     for(StepperMotor& stepperMotor : *steppers){
-        if(stepperMotor.stepper && stepperMotor.stepper->isRunning()){
+        if(stepperMotor.isRunning()){
             return true;
         }
     }
@@ -219,9 +462,10 @@ void Axis::printStepperStates(){
     for(StepperMotor& stepper : *steppers){
         Serial.print("Stepper ");
         Serial.print(stepper.id);
-        Serial.print(" current position: ");
-        if(stepper.stepper){
-            Serial.println(stepper.stepper->getCurrentPosition());
+        Serial.print(stepper.uartMode ? " [UART] " : " ");
+        Serial.print("current position: ");
+        if(stepper.uartMode || stepper.stepper){
+            Serial.println(stepper.getCurrentPosition());
         }
         else{
             Serial.println("Stepper not initialized");

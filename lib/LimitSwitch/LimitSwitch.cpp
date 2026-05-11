@@ -43,10 +43,16 @@ void LimitSwitch::setCallback(std::function<void()> callback) {
     userCallback = callback;
 }
 
-void LimitSwitch::checkAndCallback() {
-    if (read() && userCallback) {
+void LimitSwitch::checkAndCallback(bool prepToMove) {
+    bool pressed = read();
+    // Rising-edge only AND only when caller indicates a fresh trigger is
+    // welcome (e.g. axis isn't deliberately ignoring the switch). Otherwise
+    // the callback would fire every loop while the switch is mechanically
+    // held and constantly cancel any new motion command.
+    if (pressed && !lastPressed && prepToMove && userCallback) {
         userCallback();
     }
+    lastPressed = pressed;
 }
 
 
