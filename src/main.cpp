@@ -1,16 +1,24 @@
 #include <Arduino.h>
 //#include <StepperMotor.h>
-//#include <BuildPlates.h>
-//#include <LoaderBar.h> 
-#include <I2CBus.h>
+#include <BuildPlates.h>
+#include <LoaderBar.h>
+#include <Axis.h>
 #include "main.h"
 #include <Wire.h>
 #include <vector>
-#include <queue.h>
+#include <queue>
+#include <cstring>
 #include <Fan.h> 
 #include <O2Sensor.h>
 #include <HardwareSerial.h>
 #include <TMCStepper.h>
+
+// ---- ESP-NOW link to Hogforge_Xiao_Transmitter bridge --------------------
+#include <WiFi.h>
+#include <esp_wifi.h>
+#include <esp_now.h>
+#include "EspNowEZ.h"
+
 
 // ---- TMC2209 UART for the BuildPlate (broken STEP/DIR -> driven via VACTUAL) ----
 // UART2 is unused on the XIAO ESP32-S3 and can be remapped to any GPIO.
@@ -33,26 +41,155 @@ static void configureTMC(TMC2209Stepper& d) {
 
 
 
-I2CBus i2c;
+// ---- ESP-NOW bridge configuration ---------------------------------------
+// MAC of the Hogforge_Xiao_Transmitter (ESP32-C3) that sits between us and
+// the Teensy 4.1. Update to match the Xiao's printed STA MAC.
+static uint8_t XIAO_BRIDGE_MAC[6] = { 0x98, 0x3D, 0xAE, 0xAA, 0xF3, 0xE4 };
+//This mac address -> b8:f8:62:cb:e7:d4
+static constexpr int XIAO_BRIDGE_CHANNEL = 1;  // fixed channel — must match Xiao bridge
+
+// Packet layout shared with the Xiao bridge (see main.cpp on the Xiao side).
+struct __attribute__((packed)) BridgePacket {
+    uint8_t tag;   // 0xD1 = data forwarded from Teensy
+    int32_t d1;
+    int32_t d2;
+    int32_t d3;
+};
+static constexpr uint8_t BRIDGE_TAG_DATA = 0xD1;
+
 bool execute[3] = {false};
 bool setPlate = true;
 
 std::queue<std::vector<int>> CommandQueue;
+
+// Staging buffer pushed from the ESP-NOW receive callback (runs on the WiFi
+// task) and drained from loop(). Guarded by a portMUX so the std::queue is
+// never concurrently mutated.
+static portMUX_TYPE espnowMux = portMUX_INITIALIZER_UNLOCKED;
+static std::queue<std::vector<int>> espnowInbox;
+
+// Number of ESP-NOW frames accepted by onEspNowRecv since boot. Used by the
+// link-health logger to tell "silent peer" apart from "link is fine".
+static volatile uint32_t espnowRecvCount = 0;
+
+// Arduino-ESP32 2.x signature (espressif32 6.x). If you ever bump to
+// Arduino-ESP32 3.x change `const uint8_t* mac` to
+// `const esp_now_recv_info_t* info`.
+static void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
+    if (len < (int)sizeof(BridgePacket)) return;
+    BridgePacket pkt;
+    memcpy(&pkt, data, sizeof(pkt));
+    if (pkt.tag != BRIDGE_TAG_DATA) return;
+
+    // Match the shape processCommand() expects: {cmd, arg1, arg2}.
+    std::vector<int> cmd = { (int)pkt.d1, (int)pkt.d2, (int)pkt.d3 };
+    portENTER_CRITICAL(&espnowMux);
+    espnowInbox.push(std::move(cmd));
+    espnowRecvCount++;
+    portEXIT_CRITICAL(&espnowMux);
+}
+
+static void printMac(const char* label, const uint8_t mac[6]) {
+    Serial.print(label);
+    for (int i = 0; i < 6; ++i) {
+        if (mac[i] < 0x10) Serial.print('0');
+        Serial.print(mac[i], HEX);
+        if (i < 5) Serial.print(':');
+    }
+    Serial.println();
+}
+
+static bool initEspNowReceiver() {
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    // Arduino-ESP32 turns on STA modem-sleep by default. A sleeping,
+    // un-associated STA misses ESP-NOW frames and never ACKs them, so the
+    // Xiao's connectFixed() probe times out and it never enters loop().
+    WiFi.setSleep(false);
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
+    // Lock to the same channel as the Xiao bridge before esp_now_init().
+    // Without this, un-associated STAs can default to different channels.
+    esp_wifi_set_channel(XIAO_BRIDGE_CHANNEL, WIFI_SECOND_CHAN_NONE);
+
+    // Read back what the driver actually committed to.
+    uint8_t ch = 0; wifi_second_chan_t sc;
+    esp_wifi_get_channel(&ch, &sc);
+    Serial.print("Internal radio channel: "); Serial.println(ch);
+
+    uint8_t self[6] = {0};
+    esp_wifi_get_mac(WIFI_IF_STA, self);
+    printMac("Internal STA MAC : ", self);
+
+    if (ESPNow.init() != ESP_OK) {
+        Serial.println("ESP-NOW init FAILED");
+        return false;
+    }
+
+    // Needed so connectFixed() below can observe MAC-layer ACKs from the Xiao.
+    ESPNow.beginTracking();
+
+    // Add the Xiao as a peer so unicast frames from it are MAC-ACKed and so
+    // we can send replies back if we ever need to.
+    ESPNow.setFixedPeer(XIAO_BRIDGE_MAC, XIAO_BRIDGE_CHANNEL);
+    ESPNow.add_peer(XIAO_BRIDGE_MAC, XIAO_BRIDGE_CHANNEL);
+    printMac("Xiao bridge peer : ", XIAO_BRIDGE_MAC);
+
+    if (ESPNow.reg_recv_cb(onEspNowRecv) != ESP_OK) {
+        Serial.println("ESP-NOW recv callback registration FAILED");
+        return false;
+    }
+    Serial.println("ESP-NOW receiver ready.");
+    return true;
+}
+
+// Actively probe the Xiao to confirm we can reach it. Returns true on
+// link-layer ACK. Useful at boot and as a periodic health check.
+static bool checkEspNowConnection() {
+    bool ok = ESPNow.connectFixed(/*timeoutMs=*/500);
+    Serial.print("ESP-NOW link to Xiao: ");
+    Serial.println(ok ? "OK (ACK received)"
+                      : "NO ACK (peer silent or wrong channel/MAC)");
+    return ok;
+}
 
 std::vector<Fan*> circulationFan = {new Fan("CirculationFanLeft", FANLEFTPWM1, FANLEFTPWM2), new Fan("CirculationFanRight", FANRIGHTPWM1, FANRIGHTPWM2)};
 
 O2Sensor sensor;
 //============
 
-Axis* arm = new Axis(-100000);
+Axis* arm = new Axis(-200000);
 
 Axis* loadingMechanism = new Axis(-300000);
 
+// ---- Limit-switch callback cooldown ---------------------------------------
+// After a limit switch fires, ignore re-triggers for this many ms so the
+// callback can't keep stomping on a freshly-issued command (e.g. after a
+// home cycle the switch may bounce / stay asserted while the axis backs
+// off, or a new MOVEBAR can arrive while the home callback is still
+// settling).
+static constexpr uint32_t LIMIT_CB_COOLDOWN_MS = 750;
+static uint32_t lastResetLimitMs       = 0;
+static uint32_t lastLoadLimitMs        = 0;
+static uint32_t lastBuildPlateLimitMs  = 1000;
+static uint32_t lastLoadPlateLimitMs   = 1000;
+
+static inline bool limitCbCooldownActive(uint32_t &lastMs) {
+  uint32_t now = millis();
+  if ((now - lastMs) < LIMIT_CB_COOLDOWN_MS) {
+    return true; // still cooling down; suppress this callback
+  }
+  lastMs = now;
+  return false;
+}
+
 void onResetLimitTriggered(){
+  if (limitCbCooldownActive(lastResetLimitMs)) return;
   #if DEBUGMODESTART
     Serial.println("ResetLimit callback from main.cpp fired");
   #endif
-  arm->moveAxis(armHome);
+  arm->stop();
+  arm->moveAxis(armHome - 20000);
   arm->setHome(true);
 }
 
@@ -62,6 +199,7 @@ void onLoadLimitTriggered(){
   //  return; // If we're already at home, ignore further triggers (e.g. from bouncing)
   //}
 
+  if (limitCbCooldownActive(lastLoadLimitMs)) return;
   #if DEBUGMODESTART
     Serial.println("LoadLimit callback from main.cpp fired");
   #endif
@@ -76,6 +214,7 @@ void onBuildPlateLimitTriggered(){
   //if(loadingMechanism->getHome("BuildPlateStepper")){
   //  return; }// If we're already at home, ignore further triggers (e.g. from bouncing)
 
+  if (limitCbCooldownActive(lastBuildPlateLimitMs)) return;
   #if DEBUGMODESTART
   //  Serial.println("BuildPlateLimit callback from main.cpp fired");
   #endif
@@ -92,6 +231,7 @@ void onLoadPlateLimitTriggered(){
   //}
 
 
+  if (limitCbCooldownActive(lastLoadPlateLimitMs)) return;
   #if DEBUGMODESTART
   //  Serial.println("LoadPlateLimit callback from main.cpp fired");
   #endif
@@ -139,7 +279,7 @@ void processCommand(std::vector<int> commandData){
     break;
     case STARTFAN:
       for(Fan* fan : circulationFan){
-        fan->setSpeed(Fan::Speeds::SPEED_MEDIUM, Fan::Direction::FORWARD);
+        fan->setSpeed(Fan::Speeds::SPEED_MAX, Fan::Direction::FORWARD);
       }
     break;
 
@@ -150,21 +290,43 @@ void processCommand(std::vector<int> commandData){
     break;
 
     case SMALLSTEP:
-        loadingMechanism->moveAxis(commandData[2]);
+        loadingMechanism->moveSingleStepper("BuildPlateStepper", -commandData[2]);
+        loadingMechanism->moveSingleStepper("LoadPlateStepper", commandData[2]);
 
     break;
     case RAISEBOTHPLATES:
-        loadingMechanism->moveSingleStepper("BuildPlateStepper", totalPlateDistance);
-        loadingMechanism->moveSingleStepper("LoadPlateStepper", totalPlateDistance);
+        loadingMechanism->moveSingleStepper("BuildPlateStepper", commandData[2]);
+        loadingMechanism->moveSingleStepper("LoadPlateStepper", commandData[2]);
 
     break;
     case PREPPRINT:
     //Serial.println("Prepping for Print");
-        loadingMechanism->home();
-        arm->home();
+        //loadingMechanism->home();
+        //arm->home();
+
+        // Give the home() calls a moment to actually kick the steppers into
+        // motion so isRunning() can report true on the next poll. Without this
+        // the wait loop may see "not running yet" and fall through immediately.
+        // delay(20);
+
+        // // Block here until BOTH axes have come to rest at their home limits.
+        // // We must keep pumping the motor controllers (update()) AND the limit
+        // // switches (which live inside update()) so the homing callbacks can
+        // // fire and stop each axis. Do NOT recursively call loop() — that
+        // // re-enters the ESP-NOW drain and link-health logger.
+        // while (loadingMechanism->isRunning() || arm->isRunning()) {
+        //   loadingMechanism->update();
+        //   arm->update();
+        //   delay(1);
+        // }
+
+        // Both axes are now homed and zeroed by their limit-switch callbacks.
+        // It is safe to issue the lift moves; no callback will stomp them.
+        loadingMechanism->moveSingleStepper("BuildPlateStepper", totalPlateDistance);
+        loadingMechanism->moveSingleStepper("LoadPlateStepper", commandData[2]);
+
     break;
     case MOVEBAR:
-;
       arm->moveAxis(oneSwipedistance);
     break; 
     default:
@@ -179,8 +341,19 @@ void processCommand(std::vector<int> commandData){
 void setup() {
   Serial.begin(115200);
 
-  #if DEBUGMODESTART
   delay(4000);
+  // Commands now arrive over ESP-NOW from the Xiao transmitter bridge
+  // (which is itself talking UART to the Teensy 4.1). No direct UART link
+  // to the External Board from this board anymore.
+  if (!initEspNowReceiver()) {
+    Serial.println("WARNING: ESP-NOW unavailable, commands will not arrive.");
+  } else {
+    // Active boot-time check: ping the Xiao and report whether it ACKs.
+    checkEspNowConnection();
+  }
+
+  #if DEBUGMODESTART
+  
 
   Serial.println("Homing All...");
   
@@ -194,7 +367,7 @@ void setup() {
 
   //sensor.setup();
 
-  i2c.init(SDAPIN,SCLPIN);
+  
   Serial.println("Initializing Loader Bar...");
 
   arm->addLimitSwitch("ResetLimit", resetLimit);
@@ -206,7 +379,7 @@ void setup() {
   arm->addStepper("LeftStepper", std::vector<int>{leftSTEP, leftDIR, leftEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_NORMAL);
   arm->addStepper("RightStepper", std::vector<int>{rightSTEP, rightDIR, rightEN}, Axis::StepperMotor::Speed::FAST, Axis::StepperMotor::Direction::DIR_REVERSE);
 
-
+  arm->setSpeed(Axis::Speed::SLOW);
   #if DEBUGMODESTART
     Serial.println("Initializing Axis...");
   #endif
@@ -245,10 +418,14 @@ void setup() {
  // for(Fan* fan : circulationFan){
  //   fan->setSpeed(Fan::Speeds::SPEED_MAX, Fan::Direction::FORWARD);
  // }
- CommandQueue.push(std::vector<int>{HOMEALL});
+ //CommandQueue.push(std::vector<int>{HOMEALL});
 
- CommandQueue.push(std::vector<int>{RAISEBOTHPLATES, totalPlateDistance});
-
+ //CommandQueue.push(std::vector<int>{STARTFAN});
+ //CommandQueue.push(std::vector<int>{MOVEBAR}) ;
+ // RAISEBOTHPLATES handler reads commandData[2] as the distance, so this
+ // vector must have at least 3 elements. Slot [1] is unused for this command.
+ //CommandQueue.push(std::vector<int>{RAISEBOTHPLATES, 0, (int)totalPlateDistance});
+ //CommandQueue.push(std::vector<int>{HOMEALL});
 
   //CommandQueue.push(std::vector<int>{LISTONEPLATE, PlateID::BUILDPLATE, 100000});
 
@@ -259,7 +436,23 @@ void setup() {
 
 void loop() {
 
-  
+  // ---- ESP-NOW link health check ----------------------------------------
+  // Every 5 s, actively probe the Xiao bridge and log how many frames we've
+  // received since boot. Lets us tell "link down" from "link up but peer
+  // hasn't sent anything yet".
+  {
+    static uint32_t lastLinkCheck = 0;
+    if (millis() - lastLinkCheck > 5000) {
+      lastLinkCheck = millis();
+      bool linkUp = checkEspNowConnection();
+      portENTER_CRITICAL(&espnowMux);
+      uint32_t rx = espnowRecvCount;
+      portEXIT_CRITICAL(&espnowMux);
+      Serial.print("  frames received from Xiao: "); Serial.println(rx);
+      (void)linkUp;
+    }
+  }
+
   
 
 
@@ -272,7 +465,10 @@ void loop() {
     if (millis() - t > 500) {
         t = millis();
         loadingMechanism->printLimitSwitchStates();
+        arm->printLimitSwitchStates();
         loadingMechanism->printStepperStates();
+        arm->printStepperStates();
+
     }
 
   #else
@@ -295,16 +491,32 @@ void loop() {
   }
 
 
- if(i2c.isNewData()){
-   CommandQueue.push(i2c.getNewData());
-    //Serial.println("Executing command:");
-    //processCommand(i2c.getNewData());
+ // Drain anything the ESP-NOW recv callback queued up. Done under the same
+ // portMUX the callback uses so we never see a half-written std::queue.
+ {
+   portENTER_CRITICAL(&espnowMux);
+   while (!espnowInbox.empty()) {
+     CommandQueue.push(std::move(espnowInbox.front()));
+     espnowInbox.pop();
+   }
+   portEXIT_CRITICAL(&espnowMux);
+ }
+
+  // Busy -> idle transition: notify the Xiao bridge so the External Board
+  // can unblock any GCode line that is waiting on the Internal Board.
+  {
+    static bool wasBusy = false;
+    bool nowBusy = !CommandQueue.empty() || arm->isRunning() || loadingMechanism->isRunning();
+    if (wasBusy && !nowBusy) {
+      BridgePacket status;
+      status.tag = 0xD2;
+      status.d1  = 2;   // 2 = idle/done sentinel (0=fail ACK, 1=ok ACK are taken)
+      status.d2  = 0;
+      status.d3  = 0;
+      esp_now_send(XIAO_BRIDGE_MAC, reinterpret_cast<const uint8_t*>(&status), sizeof(status));
+    }
+    wasBusy = nowBusy;
   }
-
-
-
-  
-
 
   //delay(2000000);
   //Serial.printf("Queue %d ,Arm: %d,Bar: %d", i2c.isNewData(), arm->update(), loadingSet->update());

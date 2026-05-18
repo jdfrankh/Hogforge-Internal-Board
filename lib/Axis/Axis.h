@@ -20,8 +20,9 @@ public:
     };
 
     enum Speed {
-        SUPERSLOW = 1000,
-        SLOW = 2000,
+        SUPERSLOW = 500,
+        SLOW = 1000,
+        MEDIUM = 2000,
         FAST = 4000,
         SUPERFAST = 6000
     };
@@ -114,7 +115,7 @@ public:
     void setLimitSwitchCallback(const char* id, std::function<void()> callback);
 
 
-    Axis(int homingDistance);
+    Axis(long homingDistance);
     void init();
 
     bool isLimitSwitchPressed(const char* id);

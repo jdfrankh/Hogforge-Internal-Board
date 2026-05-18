@@ -10,7 +10,7 @@ we will then report an id as necessaryh
 */
 
 #define DEBUGMODESTART true
-#define DEBUGMODELOOP true
+#define DEBUGMODELOOP false
 
 enum IncomingCommands{
 
@@ -43,16 +43,20 @@ int const rightEN = 35, rightDIR = 33, rightSTEP = 34;
 int const FANLEFTPWM1 = 10, FANLEFTPWM2 = 11;
 int const FANRIGHTPWM1 = 12, FANRIGHTPWM2 = 13;
 
-long  const armHome = -100000;
-long const oneSwipedistance = 100000;
+// Parking position the arm drives to after the ResetLimit switch fires.
+// MUST be a position the arm can actually travel TO from the reset limit
+// (i.e. on the opposite side of the homing direction). homingDistance is
+// -100000 (reset side), so armHome lives on the positive / load side.
+long  const armHome = 0;
+long const oneSwipedistance = 10000;
 
-long const buildingDistance = 110000; // Total plate distance for the load and build plates.
+//long const buildingDistance = 110000; // Total plate distance for the load and build plates.
 long const totalPlateDistance = 120000; // Total plate distance for the load and build plates. 
 
 const int resetLimit = 3, loadLimit = 40;
 const int buildPlateLimit = 2, loadPlateLimit = 42;
 
-const int SDAPIN = 0, SCLPIN = 1;
+const int SDAPIN = 1, SCLPIN = 0;
 
 // ---- TMC2209 UART (BuildPlateStepper has broken STEP/DIR; driven via UART VACTUAL) ----
 int   const TMC_RX_PIN  = 18;     // MCU RX <- PDN_UART (direct)

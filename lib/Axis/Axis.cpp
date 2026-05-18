@@ -163,7 +163,20 @@ void Axis::StepperMotor::moveTo(long position){
 
         long signedTarget = direction ? position : -position;
         long delta = signedTarget - stepper->getCurrentPosition();
-        lastMoveSign = (delta > 0) ? +1 : (delta < 0 ? -1 : 0);
+
+        // lastMoveSign is read by Axis::update()'s held-switch failsafe and
+        // compared against homingDistance, which is expressed in USER-INTENT
+        // space (before the per-stepper DIR_REVERSE flip). If we recorded the
+        // post-flip stepper-space sign here, a DIR_REVERSE stepper trying to
+        // move AWAY from its limit (e.g. raising the LoadPlate off home)
+        // would look like it's moving INTO the limit and get killed every
+        // loop. Compute the sign in user space instead.
+        long userCurrent = direction
+            ? stepper->getCurrentPosition()
+            : -stepper->getCurrentPosition();
+        long userDelta = position - userCurrent;
+        lastMoveSign = (userDelta > 0) ? +1 : (userDelta < 0 ? -1 : 0);
+        (void)delta;
 
         stepper->moveTo(signedTarget);
     }
@@ -230,7 +243,7 @@ long Axis::StepperMotor::getCurrentPosition(){
     return stepper ? stepper->getCurrentPosition() : 0;
 }
 
-Axis::Axis(int homingDistance)
+Axis::Axis(long homingDistance)
     : steppers(new std::vector<StepperMotor>()),
       limitSwitches(new std::vector<LimitSwitchItem>()),
       homingDistance(homingDistance) {
@@ -282,9 +295,12 @@ void Axis::setHome(bool value, char* id){
         return;
     }
 
-    // Reset all positions of all motors
+    // Apply to all steppers when no id is supplied. Previously this branch
+    // hard-coded `false`, which made `setHome(true)` a silent no-op and
+    // meant getHome() could never report the axis as homed via the
+    // broadcast call. Honor the caller-supplied value instead.
     for(StepperMotor& stepperMotor : *steppers){
-        stepperMotor.isHoming = false;
+        stepperMotor.isHoming = value;
     }
 }
 
@@ -375,7 +391,14 @@ void Axis::setSpeed(Speed speed){
 
 bool Axis::update(){
     for(LimitSwitchItem& limitSwitch : *limitSwitches){
-        limitSwitch.limitSwitch->checkAndCallback(getHome());
+        // Always fire on rising edge. Edge detection inside checkAndCallback
+        // (!lastPressed) is enough to prevent the callback from re-firing
+        // every loop while the switch is mechanically held, so we don't need
+        // to also gate on getHome(). Gating on getHome() previously caused
+        // the reset/limit callback to be suppressed during normal MOVEBAR
+        // swipes and during manual switch tests, since isHoming is only set
+        // by Axis::home().
+        limitSwitch.limitSwitch->checkAndCallback(true);
     }
 
     // Held-switch failsafe: the edge-triggered callback above only fires on a
